@@ -1,0 +1,87 @@
+
+name: MiniAssist Build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miniassist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.12'
+
+      - name: Check project
+        run: |
+          test -f build.gradle || test -f build.gradle.kts
+          test -d src/main
+
+      - name: Build MiniAssist
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace clean build 2>&1 | tee gradle-build.log
+
+      - name: Find and verify JAR
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAR=$(find build/libs -maxdepth 1 -type f \
+            -name '*.jar' \
+            ! -name '*-sources.jar' \
+            ! -name '*-dev.jar' \
+            ! -name '*-javadoc.jar' \
+            | sort | head -n 1)
+
+          if [ -z "$JAR" ]; then
+            echo "Production JAR not found"
+            find build/libs -type f || true
+            exit 1
+          fi
+
+          jar tf "$JAR" > jar-contents.txt
+          grep -Fxq 'fabric.mod.json' jar-contents.txt
+
+          mkdir -p artifacts
+          cp "$JAR" artifacts/
+
+          echo "Verified: $JAR"
+
+      - name: Upload MiniAssist
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniAssist-1.4.1
+          path: artifacts/*.jar
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniAssist-build-log
+          path: gradle-build.log
+          if-no-files-found: ignore
